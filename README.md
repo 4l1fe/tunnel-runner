@@ -1,11 +1,28 @@
 ## Description
 
-The smart tui for seeing ssh tunnel logs. Navigation with keyboard. Highlighting tunnel addresses. Resizing automatically with terminal or tmux panels size.
+The smart tui for seeing ssh tunnel logs.
+
+Features:
+
+- CLI autocompletion from a config.
+- Highlighting tunnel addresses.
+- Navigation with a keyboard.
+- Resizing automatically with terminal or tmux panel size.
 
 ## Usage
 
 `$ run-tunnel miniserver.local docker-sock`
 
-## Screenshot
+## Screenshots
 
-![](demo.png)
+- Running
+
+  ![](demo-running.png)
+
+- Autocompletion
+
+  ![](demo-autocompletion.png)
+
+- Resizing
+
+  ![](demo-resizing.png)
