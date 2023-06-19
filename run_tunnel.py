@@ -1,31 +1,16 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
-from enum import Enum
 from dataclasses import dataclass
 
 import urwid
+import tomli
 from sh import ssh
 from typer import Typer, Argument, Option
 
 
-CMD_TCP = '-{verbose} -NL {local_host}:{local_port}:{remote_host}:{remote_port} {ssh_host}'
+CMD_TCP = '-{verbose} -NL {local_address}:{local_port}:{remote_address}:{remote_port} {ssh_host}'
 CMD_UNX = '-{verbose} -NL {local_sock}:{remote_sock} {ssh_host}'
 cli = Typer()
-
-
-class TargetNameEnum(str, Enum):
-    als_web = 'analytics-web'
-    als_db = 'analytics-db'
-    mon_web = 'monitoring-web'
-    dash_web = 'dashboards-web'
-    dock_sock = 'docker-sock'
-    memo_web = 'memo-web'
-    memo_broker = 'memo-broker'
-
-
-class SSHHostEnum(str, Enum):
-    local = 'miniserver.local'
-    remote = 'miniserver.remote'
 
 
 @dataclass
@@ -36,69 +21,96 @@ class TUIHeaderInfo:
     remote_name: str
 
 
-TargetParams = {
-    TargetNameEnum.als_web: dict(local_host='127.0.0.1',
-                                 local_port=8080,
-                                 remote_host='127.0.0.1',
-                                 remote_port=8080),
-    TargetNameEnum.als_db: dict(local_host='127.0.0.1',
-                                local_port=5432,
-                                remote_host='172.18.0.2',
-                                remote_port=5432),
-    TargetNameEnum.mon_web: dict(local_host='127.0.0.1',
-                                 local_port=8180,
-                                 remote_host='127.0.0.1',
-                                 remote_port=8180),
-    TargetNameEnum.dash_web: dict(local_host='127.0.0.1',
-                                  local_port=8380,
-                                  remote_host='127.0.0.1',
-                                  remote_port=8380),
-    TargetNameEnum.dock_sock: dict(local_sock='/tmp/docker.sock',
-                                   remote_sock='/var/run/docker.sock'),
-    TargetNameEnum.memo_web: dict(local_host='127.0.0.1',
-                                  local_port=8280,
-                                  remote_host='127.0.0.1',
-                                  remote_port=8280),
-    TargetNameEnum.memo_broker: dict(local_host='127.0.0.1',
-                                     local_port=6379,
-                                     remote_host='172.23.0.3',
-                                     remote_port=6379),
-}
+config = """
+# The list of HostName in a ssh_config file.
+[[ssh_hosts]]
+name = "miniserver.local"
+description = "Local network connection. A ssh config has to be available."
+
+[[ssh_hosts]]
+name = "miniserver.remote"
+description = "Public network connection. Only a key has to be on a server."
+
+# The list of named targets for establishing a tunnel connection
+[[targets]]
+name = "analytics-web"
+local_address = "127.0.0.1"
+local_port = 8080
+remote_address = "127.0.0.1"
+remote_port = 8080
+description = "Analytics http server."
+
+[[targets]]
+name = "analytics-db"
+local_address = "127.0.0.1"
+local_port = 5432
+remote_address = "172.18.0.2"
+remote_port = 5432
+description = "Analytics DB server."
+
+[[targets]]
+name = "monitoring-web"
+local_address = "127.0.0.1"
+local_port = 8180
+remote_address = "127.0.0.1"
+remote_port = 8180
+description = "Monitoring http server."
+
+[[targets]]
+name = "dashboards-web"
+local_address = "127.0.0.1"
+local_port = 8380
+remote_address = "127.0.0.1"
+remote_port = 8380
+
+[[targets]]
+name = "docker-sock"
+local_sock = "/tmp/docker.sock"
+remote_sock = "/var/run/docker.sock"
+description = "Docker Daemon Unix socket."
+
+[[targets]]
+name = "memo-web"
+local_address = "127.0.0.1"
+local_port = 8280
+remote_address = "127.0.0.1"
+remote_port = 8280
+description = "Memo Cards http server."
+
+[[targets]]
+name = "memo-broker"
+local_address = "127.0.0.1"
+local_port = 6379
+remote_address = "172.23.0.3"
+remote_port = 6379
+"""
 
 
 class Autocompletion:
-    """Extract name and help text from variables"""
+    """Extract name and help text from the config."""
 
     ARG_HOST = 'ssh-host'
     ARG_TARGET = 'target'
-    HELP_TEXT = {
-        SSHHostEnum.local: "Local network connection. A ssh config has to be available.",
-        SSHHostEnum.remote: "Public network connection. Only a key has to be on a server.",
-        TargetNameEnum.als_web: "Analytics http server.",
-        TargetNameEnum.als_db: "Analytics DB server.",
-        TargetNameEnum.mon_web: "Monitoring http server.",
-        TargetNameEnum.dash_web: "Dashboards http server.",
-        TargetNameEnum.memo_web: "Memo Cards http server.",
-        TargetNameEnum.memo_broker: "Memo Cards Redis server.",
-        TargetNameEnum.dock_sock: "Docker Daemon Unix socket.",
-    }
 
     def __init__(self, argument):
+        config_dict = tomli.loads(config)
         if argument == self.ARG_HOST:
-            self.autocomplete_enum = SSHHostEnum
+            self.autocomplete_records = config_dict['ssh_hosts']
         elif argument == self.ARG_TARGET:
-            self.autocomplete_enum = TargetNameEnum
-
+            self.autocomplete_records = config_dict['targets']
+        else:
+            raise ValueError('Wrong `argument` value of autocompletion.')
+            
     def do(self, incomplete: str):
         """Instead of the method __call_() as it raises
         TypeError: <__main__.Autocompletion> is not a module, class, method, or function."""
 
         completion = []
 
-        for enum in self.autocomplete_enum:
-            if enum.value.startswith(incomplete):
-                help = self.HELP_TEXT[enum]
-                completion.append((enum.value, help))
+        for record in self.autocomplete_records:
+            if record['name'].startswith(incomplete):
+                help = record.get('description', '...')  # Default str for printing as a row
+                completion.append((record['name'], help))
 
         return completion
 
@@ -149,35 +161,55 @@ def create_tui_loop(info: TUIHeaderInfo):
 
 
 @cli.command()
-def run(ssh_host: SSHHostEnum = Argument(None, show_default=False, autocompletion=Autocompletion('ssh-host').do,
-                                         help='Host name in ssh config file'),
-        target: TargetNameEnum = Argument(None, show_default=False, autocompletion=Autocompletion('target').do,
-                                          help="List of target names from the util's config"),
+def run(ssh_host: str = Argument(None, show_default=False, autocompletion=Autocompletion('ssh-host').do,
+                                 help="A ssh_host name from the util's config. Has to be a valid HostName in an ssh config file"),
+        target: str = Argument(None, show_default=False, autocompletion=Autocompletion('target').do,
+                               help="A target name from the util's config"),
         verbose: str = Option('v', help='Ssh cli verbose mode. See `ssh --help`'),
-        local_host: str = Option(None, help='Local addr to listen to.'),
-        local_port: str = Option(None, help='Local port to listen to.'),
-        remote_host: str = Option(None, help='Addr on a remote server to forward to.'),
-        remote_port: str = Option(None, help='Port on a remote server to forward to.'),
-        local_sock: str = Option(None, help='Local unix socket to listen to.'),
-        remote_sock: str = Option(None, help='Unix socket on a remote server to forward to.')
+        local_address: str = Option(None, show_default=False, help='Local addr to listen to.', rich_help_panel='Target parameters'),
+        local_port: str = Option(None, show_default=False, help='Local port to listen to.', rich_help_panel='Target parameters'),
+        remote_address: str = Option(None, show_default=False, help='Addr on a remote server to forward to.', rich_help_panel='Target parameters'),
+        remote_port: str = Option(None, show_default=False, help='Port on a remote server to forward to.', rich_help_panel='Target parameters'),
+        local_sock: str = Option(None, show_default=False, help='Local unix socket to listen to.', rich_help_panel='Target parameters'),
+        remote_sock: str = Option(None, show_default=False, help='Unix socket on a remote server to forward to.', rich_help_panel='Target parameters')
         ):
     """Establish an SSH forward tunnel. Highlight the tunnel info.
     Track the tunnel logs. Navigate them up and down.
 
     First of all, a target is taken from the known
-    and its default value is replaced with an according parameter if provided.
+    and its default value is replaced with an according parameter if provided.\n\n
+
+    Config pattern of the TOML format:\n
+    ```\n
+    [[ssh_hosts]]\n
+    name = "host.name"  # A valid ssh HostName\n
+    description = "Helpful description to list in autocompletion.."\n\n
+
+    [[targets]]\n
+    name = "service-foo"  # An arbitrary name of valid TOML key\n
+    local_address = "127.0.0.1"\n
+    local_port = 8080\n
+    remote_address = "127.0.0.1"\n
+    remote_port = 8080\n
+    description = "Helpful description to list in autocompletion."\n
+    ```
     """
      
     params = {'ssh_host': ssh_host,
               'target': target}
-    params.update(TargetParams[target])
 
-    if local_host:
-        params.update(local_host=local_host)
+    config_dict = tomli.loads(config)
+    for record in config_dict['targets']:
+        if record['name'] == target:
+            params.update(**record)
+            break
+
+    if local_address:
+        params.update(local_address=local_address)
     if local_port:
         params.update(local_port=local_port)
-    if remote_host:
-        params.update(remote_host=remote_host)
+    if remote_address:
+        params.update(remote_address=remote_address)
     if remote_port:
         params.update(remote_port=remote_port)
 
@@ -186,19 +218,19 @@ def run(ssh_host: SSHHostEnum = Argument(None, show_default=False, autocompletio
     if remote_sock:
         params.update(remote_sock=remote_sock)
 
-    cmd_template = CMD_TCP if target != TargetNameEnum.dock_sock  else CMD_UNX
+    cmd_template = CMD_TCP if target != 'dock_sock'  else CMD_UNX
     cmd = cmd_template.format(verbose=verbose, **params).split()
 
-    info = TUIHeaderInfo(local=params['local_sock']
-                               if params.get('local_sock')
-                               else f'{params["local_host"]}:{params["local_port"]}',
-                         local_name=target.value,
-                         remote=params['remote_sock']
-                               if params.get('remote_sock')
-                               else f'{params["remote_host"]}:{params["remote_port"]}',
-                         remote_name=ssh_host)
-    loop, write_fd = create_tui_loop(info)
-    cmd = ssh(*cmd, _out=write_fd, _err_to_out=True, _bg_exc=False, _bg=True)
+    tui_info = TUIHeaderInfo(local=params['local_sock']
+                                   if params.get('local_sock')
+                                   else f'{params["local_address"]}:{params["local_port"]}',
+                             local_name=target,
+                             remote=params['remote_sock']
+                                    if params.get('remote_sock')
+                                    else f'{params["remote_address"]}:{params["remote_port"]}',
+                             remote_name=ssh_host)
+    loop, tui_output = create_tui_loop(tui_info)
+    cmd = ssh(*cmd, _out=tui_output, _err_to_out=True, _bg_exc=False, _bg=True)
 
     loop.run()
     cmd.terminate()
