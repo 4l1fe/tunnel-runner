@@ -8,16 +8,15 @@ from sh import ssh
 from typer import Typer, Argument, Option
 
 
-CMD_TCP = '-{verbose} -NL {local_address}:{local_port}:{remote_address}:{remote_port} {ssh_host}'
-CMD_UNX = '-{verbose} -NL {local_sock}:{remote_sock} {ssh_host}'
+CMD_TEMPLATE = '-{verbose} -NL {local_unit}:{remote_unit} {ssh_host}'
 cli = Typer()
 
 
 @dataclass
 class TUIHeaderInfo:
-    local: str
+    local_unit: str
     local_name: str
-    remote: str
+    remote_unit: str
     remote_name: str
 
 
@@ -109,7 +108,7 @@ class Autocompletion:
 
         for record in self.autocomplete_records:
             if record['name'].startswith(incomplete):
-                help = record.get('description', '...')  # Default str for printing as a row
+                help = record.get('description', '')
                 completion.append((record['name'], help))
 
         return completion
@@ -131,12 +130,12 @@ def create_tui_loop(info: TUIHeaderInfo):
     list_walker = urwid.SimpleFocusListWalker([])
     tunnel_output = urwid.ListBox(list_walker)
     tunnel_info = urwid.Text(['SSH Forward Tunnel ',
-                              ('prm', info.local),
+                              ('prm', info.local_unit),
                               '[',
                               ('prm', info.local_name),
                               ']',
                               ' => ',
-                              ('prm', info.remote),
+                              ('prm', info.remote_unit),
                               '[',
                               ('prm', info.remote_name),
                               ']',
@@ -152,7 +151,7 @@ def create_tui_loop(info: TUIHeaderInfo):
         try:
             list_walker.set_focus(list_walker.get_next(list_walker.get_focus()[1])[1])
         except TypeError:
-            pass  # First run, the empty list error
+            pass  # First run, an empty list error
 
     loop = urwid.MainLoop(frame, palette, unhandled_input=exit_on_q)
     write_fd = loop.watch_pipe(update_body)
@@ -167,9 +166,9 @@ def run(ssh_host: str = Argument(None, show_default=False, autocompletion=Autoco
                                help="A target name from the util's config"),
         verbose: str = Option('v', help='Ssh cli verbose mode. See `ssh --help`'),
         local_address: str = Option(None, show_default=False, help='Local addr to listen to.', rich_help_panel='Target parameters'),
-        local_port: str = Option(None, show_default=False, help='Local port to listen to.', rich_help_panel='Target parameters'),
+        local_port: int = Option(None, show_default=False, help='Local port to listen to.', rich_help_panel='Target parameters'),
         remote_address: str = Option(None, show_default=False, help='Addr on a remote server to forward to.', rich_help_panel='Target parameters'),
-        remote_port: str = Option(None, show_default=False, help='Port on a remote server to forward to.', rich_help_panel='Target parameters'),
+        remote_port: int = Option(None, show_default=False, help='Port on a remote server to forward to.', rich_help_panel='Target parameters'),
         local_sock: str = Option(None, show_default=False, help='Local unix socket to listen to.', rich_help_panel='Target parameters'),
         remote_sock: str = Option(None, show_default=False, help='Unix socket on a remote server to forward to.', rich_help_panel='Target parameters')
         ):
@@ -195,42 +194,42 @@ def run(ssh_host: str = Argument(None, show_default=False, autocompletion=Autoco
     ```
     """
      
-    params = {'ssh_host': ssh_host,
-              'target': target}
-
     config_dict = tomli.loads(config)
-    for record in config_dict['targets']:
-        if record['name'] == target:
-            params.update(**record)
+    for cfg_params in config_dict['targets']:
+        if cfg_params['name'] == target:  # Take the predefined target's params
             break
 
     if local_address:
-        params.update(local_address=local_address)
+        cfg_params.update(local_address=local_address)
     if local_port:
-        params.update(local_port=local_port)
+        cfg_params.update(local_port=local_port)
     if remote_address:
-        params.update(remote_address=remote_address)
+        cfg_params.update(remote_address=remote_address)
     if remote_port:
-        params.update(remote_port=remote_port)
-
+        cfg_params.update(remote_port=remote_port)
     if local_sock:
-        params.update(local_sock=local_sock)
+        cfg_params.update(local_sock=local_sock)
     if remote_sock:
-        params.update(remote_sock=remote_sock)
+        cfg_params.update(remote_sock=remote_sock)
 
-    cmd_template = CMD_TCP if target != 'dock_sock'  else CMD_UNX
-    cmd = cmd_template.format(verbose=verbose, **params).split()
+    # Generalize TCP or Unix to a unit
+    local_unit = cfg_params['local_sock'] \
+                 if cfg_params.get('local_sock') \
+                 else f'{cfg_params["local_address"]}:{cfg_params["local_port"]}'
+    remote_unit = cfg_params['remote_sock'] \
+                  if cfg_params.get('remote_sock') \
+                  else f'{cfg_params["remote_address"]}:{cfg_params["remote_port"]}'
 
-    tui_info = TUIHeaderInfo(local=params['local_sock']
-                                   if params.get('local_sock')
-                                   else f'{params["local_address"]}:{params["local_port"]}',
+    cmd_args = CMD_TEMPLATE.format(verbose=verbose, local_unit=local_unit,
+                                   remote_unit=remote_unit, ssh_host=ssh_host) \
+                           .split()
+    tui_info = TUIHeaderInfo(local_unit=local_unit,
                              local_name=target,
-                             remote=params['remote_sock']
-                                    if params.get('remote_sock')
-                                    else f'{params["remote_address"]}:{params["remote_port"]}',
+                             remote_unit=remote_unit,
                              remote_name=ssh_host)
+
     loop, tui_output = create_tui_loop(tui_info)
-    cmd = ssh(*cmd, _out=tui_output, _err_to_out=True, _bg_exc=False, _bg=True)
+    cmd = ssh(*cmd_args, _out=tui_output, _err_to_out=True, _bg_exc=False, _bg=True)
 
     loop.run()
     cmd.terminate()
@@ -243,7 +242,7 @@ if __name__ == '__main__':
     from rich.box import SIMPLE
 
     class Panel(_Panel):
-        """Replacer of the hardcoded Panel Box type removing border."""
+        """Replacer of the hardcoded Panel Box type for removing a border."""
 
         def __init__(self, *args, **kwargs):
             super().__init__(*args, box=SIMPLE, **kwargs)
