@@ -1,5 +1,7 @@
 #!/usr/bin/python3
 # -*- coding: utf-8 -*-
+import os
+from pathlib import Path
 from dataclasses import dataclass
 
 import urwid
@@ -9,7 +11,8 @@ from typer import Typer, Argument, Option
 
 
 CMD_TEMPLATE = '-{verbose} -NL {local_unit}:{remote_unit} {ssh_host}'
-cli = Typer()
+CONFIG_FILE = Path(os.getenv('XDG_CONFIG_HOME') or os.getenv('HOME')) / '.config' / 'tunnel-runner.toml'
+cli = Typer(pretty_exceptions_enable=False)
 
 
 @dataclass
@@ -20,98 +23,47 @@ class TUIHeaderInfo:
     remote_name: str
 
 
-config = """
-# The list of HostName in a ssh_config file.
-[[ssh_hosts]]
-name = "miniserver.local"
-description = "Local network connection. A ssh config has to be available."
-
-[[ssh_hosts]]
-name = "miniserver.remote"
-description = "Public network connection. Only a key has to be on a server."
-
-# The list of named targets for establishing a tunnel connection
-[[targets]]
-name = "analytics-web"
-local_address = "127.0.0.1"
-local_port = 8080
-remote_address = "127.0.0.1"
-remote_port = 8080
-description = "Analytics http server."
-
-[[targets]]
-name = "analytics-db"
-local_address = "127.0.0.1"
-local_port = 5432
-remote_address = "172.18.0.2"
-remote_port = 5432
-description = "Analytics DB server."
-
-[[targets]]
-name = "monitoring-web"
-local_address = "127.0.0.1"
-local_port = 8180
-remote_address = "127.0.0.1"
-remote_port = 8180
-description = "Monitoring http server."
-
-[[targets]]
-name = "dashboards-web"
-local_address = "127.0.0.1"
-local_port = 8380
-remote_address = "127.0.0.1"
-remote_port = 8380
-
-[[targets]]
-name = "docker-sock"
-local_sock = "/tmp/docker.sock"
-remote_sock = "/var/run/docker.sock"
-description = "Docker Daemon Unix socket."
-
-[[targets]]
-name = "memo-web"
-local_address = "127.0.0.1"
-local_port = 8280
-remote_address = "127.0.0.1"
-remote_port = 8280
-description = "Memo Cards http server."
-
-[[targets]]
-name = "memo-broker"
-local_address = "127.0.0.1"
-local_port = 6379
-remote_address = "172.23.0.3"
-remote_port = 6379
-"""
-
-
 class Autocompletion:
     """Extract name and help text from the config."""
 
-    ARG_HOST = 'ssh-host'
-    ARG_TARGET = 'target'
+    SECTION_HOSTS = 'ssh_hosts'
+    SECTION_TARGETS = 'targets'
 
-    def __init__(self, argument):
-        config_dict = tomli.loads(config)
-        if argument == self.ARG_HOST:
-            self.autocomplete_records = config_dict['ssh_hosts']
-        elif argument == self.ARG_TARGET:
-            self.autocomplete_records = config_dict['targets']
-        else:
-            raise ValueError('Wrong `argument` value of autocompletion.')
+    def __init__(self, cfg_section):
+        self.cfg_section = cfg_section
             
-    def do(self, incomplete: str):
+    def do(self, ctx, args, incomplete):
         """Instead of the method __call_() as it raises
         TypeError: <__main__.Autocompletion> is not a module, class, method, or function."""
 
         completion = []
 
-        for record in self.autocomplete_records:
+        config_option = Path(ctx.params.get('config', CONFIG_FILE))
+        autocomplete_records = self._extract_config_records(self.cfg_section, config_option)
+
+        for record in autocomplete_records:
             if record['name'].startswith(incomplete):
                 help = record.get('description', '')
                 completion.append((record['name'], help))
 
         return completion
+
+    def _extract_config_records(self, cfg_section, config_file: Path) -> list[dict]:
+        assert cfg_section in {self.SECTION_HOSTS, self.SECTION_TARGETS}, \
+               'Wrong `cfg_section` value of autocompletion.'
+
+        if not config_file.exists():
+            # raise FileExistsError(config_file)
+            return []
+        elif not config_file.is_file():
+            # TypeError('Cofig must be a toml file')
+            return []
+            
+        with config_file.open('rb') as file:
+            config_dict = tomli.load(file)
+
+        records = config_dict[cfg_section]
+        return records 
 
 
 def create_tui_loop(info: TUIHeaderInfo):
@@ -160,41 +112,53 @@ def create_tui_loop(info: TUIHeaderInfo):
 
 
 @cli.command()
-def run(ssh_host: str = Argument(None, show_default=False, autocompletion=Autocompletion('ssh-host').do,
-                                 help="A ssh_host name from the util's config. Has to be a valid HostName in an ssh config file"),
-        target: str = Argument(None, show_default=False, autocompletion=Autocompletion('target').do,
+def run(ssh_host: str = Argument(None, show_default=False, autocompletion=Autocompletion('ssh_hosts').do,
+                                 help="A ssh_host name from the util's config. "
+                                      "Has to be a valid HostName in an ssh config file"),
+        target: str = Argument(None, show_default=False, autocompletion=Autocompletion('targets').do,
                                help="A target name from the util's config"),
         verbose: str = Option('v', help='Ssh cli verbose mode. See `ssh --help`'),
-        local_address: str = Option(None, show_default=False, help='Local addr to listen to.', rich_help_panel='Target parameters'),
-        local_port: int = Option(None, show_default=False, help='Local port to listen to.', rich_help_panel='Target parameters'),
-        remote_address: str = Option(None, show_default=False, help='Addr on a remote server to forward to.', rich_help_panel='Target parameters'),
-        remote_port: int = Option(None, show_default=False, help='Port on a remote server to forward to.', rich_help_panel='Target parameters'),
-        local_sock: str = Option(None, show_default=False, help='Local unix socket to listen to.', rich_help_panel='Target parameters'),
-        remote_sock: str = Option(None, show_default=False, help='Unix socket on a remote server to forward to.', rich_help_panel='Target parameters')
+        local_address: str = Option(None, show_default=False, help='Local addr to listen to.',
+                                    rich_help_panel='Target options'),
+        local_port: int = Option(None, show_default=False, help='Local port to listen to.',
+                                 rich_help_panel='Target options'),
+        remote_address: str = Option(None, show_default=False, help='Addr on a remote server to forward to.',
+                                     rich_help_panel='Target options'),
+        remote_port: int = Option(None, show_default=False, help='Port on a remote server to forward to.',
+                                  rich_help_panel='Target options'),
+        local_sock: str = Option(None, show_default=False, help='Local unix socket to listen to.',
+                                 rich_help_panel='Target options'),
+        remote_sock: str = Option(None, show_default=False, help='Unix socket on a remote server to forward to.',
+                                  rich_help_panel='Target options'),
+        config: Path = Option(CONFIG_FILE, rich_help_panel='Config options',
+        help="""The `tunnel-runner.toml` config in the XDG_CONFIG_HOME or HOME/.config dir\n
+                Config pattern of the TOML format:\n
+                ```\n
+                [[ssh_hosts]]\n
+                name = "host.name"  # A valid ssh `HostName`\n
+                description = "Helpful description to display in an autocompletion list."\n\n
+
+                [[targets]]\n
+                name = "service-name"  # An arbitrary name of valid TOML key\n
+                local_address = "127.0.0.1"\n
+                local_port = 8080\n
+                remote_address = "127.0.0.1"\n
+                remote_port = 8080\n
+                description = "Helpful description to display in an autocompletion list."\n
+                ```
+        """),
         ):
     """Establish an SSH forward tunnel. Highlight the tunnel info.
     Track the tunnel logs. Navigate them up and down.
+    Autocomplete the arguments from a config file.
 
     First of all, a target is taken from the known
-    and its default value is replaced with an according parameter if provided.\n\n
-
-    Config pattern of the TOML format:\n
-    ```\n
-    [[ssh_hosts]]\n
-    name = "host.name"  # A valid ssh HostName\n
-    description = "Helpful description to list in autocompletion.."\n\n
-
-    [[targets]]\n
-    name = "service-foo"  # An arbitrary name of valid TOML key\n
-    local_address = "127.0.0.1"\n
-    local_port = 8080\n
-    remote_address = "127.0.0.1"\n
-    remote_port = 8080\n
-    description = "Helpful description to list in autocompletion."\n
-    ```
+    and its default value is replaced with an according option if provided.
     """
      
-    config_dict = tomli.loads(config)
+    with config.open('rb') as file:
+        config_dict = tomli.load(file)
+
     for cfg_params in config_dict['targets']:
         if cfg_params['name'] == target:  # Take the predefined target's params
             break
@@ -229,6 +193,8 @@ def run(ssh_host: str = Argument(None, show_default=False, autocompletion=Autoco
                              remote_name=ssh_host)
 
     loop, tui_output = create_tui_loop(tui_info)
+
+    # TODO reset or a normal quit without exception `ProcessLookupError: [Errno 3] No such process`
     cmd = ssh(*cmd_args, _out=tui_output, _err_to_out=True, _bg_exc=False, _bg=True)
 
     loop.run()
