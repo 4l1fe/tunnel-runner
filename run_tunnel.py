@@ -3,6 +3,7 @@
 import os
 from pathlib import Path
 from dataclasses import dataclass
+from contextlib import suppress
 
 import urwid
 import tomli
@@ -36,17 +37,13 @@ class Autocompletion:
         """Instead of the method __call_() as it raises
         TypeError: <__main__.Autocompletion> is not a module, class, method, or function."""
 
-        completion = []
-
         config_option = Path(ctx.params.get('config', CONFIG_FILE))
         autocomplete_records = self._extract_config_records(self.cfg_section, config_option)
 
         for record in autocomplete_records:
             if record['name'].startswith(incomplete):
                 help = record.get('description', '')
-                completion.append((record['name'], help))
-
-        return completion
+                yield (record['name'], help)
 
     def _extract_config_records(self, cfg_section, config_file: Path) -> list[dict]:
         assert cfg_section in {self.SECTION_HOSTS, self.SECTION_TARGETS}, \
@@ -119,23 +116,23 @@ def run(ssh_host: str = Argument(None, show_default=False, autocompletion=Autoco
                                help="A target name from the util's config"),
         verbose: str = Option('v', help='Ssh cli verbose mode. See `ssh --help`'),
         local_address: str = Option(None, show_default=False, help='Local addr to listen to.',
-                                    rich_help_panel='Target options'),
+                                    rich_help_panel='Target options to replace'),
         local_port: int = Option(None, show_default=False, help='Local port to listen to.',
-                                 rich_help_panel='Target options'),
+                                 rich_help_panel='Target options to replace'),
         remote_address: str = Option(None, show_default=False, help='Addr on a remote server to forward to.',
-                                     rich_help_panel='Target options'),
+                                     rich_help_panel='Target options to replace'),
         remote_port: int = Option(None, show_default=False, help='Port on a remote server to forward to.',
-                                  rich_help_panel='Target options'),
+                                  rich_help_panel='Target options to replace'),
         local_sock: str = Option(None, show_default=False, help='Local unix socket to listen to.',
-                                 rich_help_panel='Target options'),
+                                 rich_help_panel='Target options to replace'),
         remote_sock: str = Option(None, show_default=False, help='Unix socket on a remote server to forward to.',
-                                  rich_help_panel='Target options'),
+                                  rich_help_panel='Target options to replace'),
         config: Path = Option(CONFIG_FILE, rich_help_panel='Config options',
-        help="""The `tunnel-runner.toml` config in the XDG_CONFIG_HOME or HOME/.config dir\n
+        help="""The `tunnel-runner.toml` config in the `XDG_CONFIG_HOME` or `HOME/.config` dir\n
                 Config pattern of the TOML format:\n
                 ```\n
                 [[ssh_hosts]]\n
-                name = "host.name"  # A valid ssh `HostName`\n
+                name = "host.name"  # A valid ssh_config `Host` value\n
                 description = "Helpful description to display in an autocompletion list."\n\n
 
                 [[targets]]\n
@@ -187,6 +184,8 @@ def run(ssh_host: str = Argument(None, show_default=False, autocompletion=Autoco
     cmd_args = CMD_TEMPLATE.format(verbose=verbose, local_unit=local_unit,
                                    remote_unit=remote_unit, ssh_host=ssh_host) \
                            .split()
+    cmd_args.extend(['-o', 'StreamLocalBindUnlink=yes'])  # Make ssh run with an existent unix socket
+
     tui_info = TUIHeaderInfo(local_unit=local_unit,
                              local_name=target,
                              remote_unit=remote_unit,
