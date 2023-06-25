@@ -3,11 +3,10 @@
 import os
 from pathlib import Path
 from dataclasses import dataclass
-from contextlib import suppress
 
 import urwid
 import tomli
-from sh import ssh
+import sh
 from typer import Typer, Argument, Option
 
 
@@ -72,8 +71,11 @@ def create_tui_loop(info: TUIHeaderInfo):
     palette = [
         # structure: name, foreground, background, mono, foreground_high, background_high
         ('header', 'black', 'white'),
-        ('footer', 'white', ''),
-        ('prm', 'light red,bold', 'white')
+        # ('footer', 'white', ''),
+        ('footer', 'black', 'white'),
+        ('prm', 'light red,bold', 'white'),
+        ('out', 'light green', ''),
+        ('err', 'light red', ''),
     ]
 
     list_walker = urwid.SimpleFocusListWalker([])
@@ -95,17 +97,21 @@ def create_tui_loop(info: TUIHeaderInfo):
                         body=tunnel_output,
                         footer=urwid.AttrMap(tui_help, 'footer'))
 
-    def update_body(data):
-        list_walker.append(urwid.Text(data.decode().strip()))
+    def update_body(data, style):
+        text = data.decode().strip()
+        # list_walker.append(urwid.Text((style, text)))
+        list_walker.append(urwid.Text(text))
         try:
-            list_walker.set_focus(list_walker.get_next(list_walker.get_focus()[1])[1])
+            # list_walker.set_focus(list_walker.get_next(list_walker.get_focus()[1])[1])
+            list_walker.set_focus(len(list_walker) - 1)
         except TypeError:
             pass  # First run, an empty list error
 
     loop = urwid.MainLoop(frame, palette, unhandled_input=exit_on_q)
-    write_fd = loop.watch_pipe(update_body)
+    write_from_out = loop.watch_pipe(lambda data: update_body(data, 'out'))
+    write_from_err = loop.watch_pipe(lambda data: update_body(data, 'err'))
 
-    return loop, write_fd
+    return loop, write_from_out, write_from_err
 
 
 @cli.command()
@@ -191,14 +197,43 @@ def run(ssh_host: str = Argument(None, show_default=False, autocompletion=Autoco
                              remote_unit=remote_unit,
                              remote_name=ssh_host)
 
-    loop, tui_output = create_tui_loop(tui_info)
+    loop, write_from_out, write_from_err = create_tui_loop(tui_info)
+
+    def interact_with_loop(line, in_queue, pipe_end):
+        os.write(pipe_end, line.encode())
+        # print('Line: ', line)
+
+        if line.startswith('Are you sure you want'):
+            in_queue.put('yes\n')
+
+        # elif line.startswith('This key is not known by'):
+        #     text = 'Truncated...'.encode()
+        #     os.write(pipe_end, text)
 
     # TODO reset or a normal quit without exception `ProcessLookupError: [Errno 3] No such process`
-    cmd = ssh(*cmd_args, _out=tui_output, _err_to_out=True, _bg_exc=False, _bg=True)
+    cmd = sh.ssh(*cmd_args,
+                 _out=lambda line, in_queue: interact_with_loop(line, in_queue, write_from_out),
+                 _err=lambda line, in_queue: interact_with_loop(line, in_queue, write_from_err),
+                 _bg=True,
+                 _bg_exc=False,
+                 _tty_in=True,
+                 _tty_out=True,
+                 _unify_ttys=True,
+                 _no_out=True,
+                 _no_err=True,
+                 _no_pipe=True,
+                 _out_bufsize=1,
+                 _err_bufsize=1,
+                 _in_bufsize=1,
+                 _internal_bufsize=0
+    )
 
     loop.run()
-    cmd.terminate()
-    cmd.wait()
+    try:
+        cmd.terminate()
+        cmd.wait()
+    except sh.SignalException_SIGTERM:
+        pass
 
 
 if __name__ == '__main__':
