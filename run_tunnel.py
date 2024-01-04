@@ -5,9 +5,9 @@ from pathlib import Path
 from dataclasses import dataclass
 
 import urwid
-import tomli
 import sh
 from typer import Typer, Argument, Option
+from dynaconf import Dynaconf
 
 
 CMD_TEMPLATE = '-{verbose} -NL {local_unit}:{remote_unit} {ssh_host}'
@@ -39,12 +39,12 @@ class Autocompletion:
         config_option = Path(ctx.params.get('config', CONFIG_FILE))
         autocomplete_records = self._extract_config_records(self.cfg_section, config_option)
 
-        for record in autocomplete_records:
-            if record['name'].startswith(incomplete):
-                help = record.get('description', '')
-                yield (record['name'], help)
+        for record_name, record_data in autocomplete_records.items():
+            if record_name.startswith(incomplete):
+                help = record_data.get('description', '')
+                yield (record_name, help)
 
-    def _extract_config_records(self, cfg_section, config_file: Path) -> list[dict]:
+    def _extract_config_records(self, cfg_section, config_file: Path) -> dict:
         assert cfg_section in {self.SECTION_HOSTS, self.SECTION_TARGETS}, \
                'Wrong `cfg_section` value of autocompletion.'
 
@@ -55,25 +55,20 @@ class Autocompletion:
             # TypeError('Cofig must be a toml file')
             return []
             
-        with config_file.open('rb') as file:
-            config_dict = tomli.load(file)
+        settings = Dynaconf(settings_file=config_file)
+        records = settings[cfg_section]
 
-        records = config_dict[cfg_section]
         return records 
 
 
 def create_tui_loop(info: TUIHeaderInfo):
-
-    def exit_on_q(key):
-        if key in ('q', 'Q'):
-            raise urwid.ExitMainLoop()
 
     palette = [
         # structure: name, foreground, background, mono, foreground_high, background_high
         ('header', 'black', 'white'),
         # ('footer', 'white', ''),
         ('footer', 'black', 'white'),
-        ('prm', 'light red,bold', 'white'),
+        ('parameter', 'light red,bold', 'white'),
         ('out', 'light green', ''),
         ('err', 'light red', ''),
     ]
@@ -81,14 +76,14 @@ def create_tui_loop(info: TUIHeaderInfo):
     list_walker = urwid.SimpleFocusListWalker([])
     tunnel_output = urwid.ListBox(list_walker)
     tunnel_info = urwid.Text(['SSH Forward Tunnel ',
-                              ('prm', info.local_unit),
+                              ('parameter', info.local_unit),
                               '[',
-                              ('prm', info.local_name),
+                              ('parameter', info.local_name),
                               ']',
                               ' => ',
-                              ('prm', info.remote_unit),
+                              ('parameter', info.remote_unit),
                               '[',
-                              ('prm', info.remote_name),
+                              ('parameter', info.remote_name),
                               ']',
                               ])
     tui_help = urwid.Text('Navigation `Up`, `Down`, `PageUp`, `PageDown`, `Home`, `End`. Press `q` or `Q` to quit.',
@@ -97,10 +92,14 @@ def create_tui_loop(info: TUIHeaderInfo):
                         body=tunnel_output,
                         footer=urwid.AttrMap(tui_help, 'footer'))
 
+    def exit_on_q(key):
+        if key in ('q', 'Q'):
+            raise urwid.ExitMainLoop()
+
     def update_body(data, style):
         text = data.decode().strip()
-        # list_walker.append(urwid.Text((style, text)))
-        list_walker.append(urwid.Text(text))
+        list_walker.append(urwid.Text((style, text)))
+        # list_walker.append(urwid.Text(text))
         try:
             # list_walker.set_focus(list_walker.get_next(list_walker.get_focus()[1])[1])
             list_walker.set_focus(len(list_walker) - 1)
@@ -137,12 +136,10 @@ def run(ssh_host: str = Argument(None, show_default=False, autocompletion=Autoco
         help="""The `tunnel-runner.toml` config in the `XDG_CONFIG_HOME` or `HOME/.config` dir\n
                 Config pattern of the TOML format:\n
                 ```\n
-                [[ssh_hosts]]\n
-                name = "host.name"  # A valid ssh_config `Host` value\n
+                [ssh_hosts."host.name"]  # A valid ssh_config `Host` value prefixed with `ssh_hosts`\n
                 description = "Helpful description to display in an autocompletion list."\n\n
 
-                [[targets]]\n
-                name = "service-name"  # An arbitrary name of valid TOML key\n
+                [targets.service-name]  # An arbitrary name of valid TOML key prefixed with `targets`\n
                 local_address = "127.0.0.1"\n
                 local_port = 8080\n
                 remote_address = "127.0.0.1"\n
@@ -159,13 +156,9 @@ def run(ssh_host: str = Argument(None, show_default=False, autocompletion=Autoco
     and its default value is replaced with an according option if provided.
     """
      
-    with config.open('rb') as file:
-        config_dict = tomli.load(file)
+    settings = Dynaconf(settings_file=config)  # TODO Validation
 
-    for cfg_params in config_dict['targets']:
-        if cfg_params['name'] == target:  # Take the predefined target's params
-            break
-
+    cfg_params = settings.targets[target]
     if local_address:
         cfg_params.update(local_address=local_address)
     if local_port:
@@ -180,12 +173,12 @@ def run(ssh_host: str = Argument(None, show_default=False, autocompletion=Autoco
         cfg_params.update(remote_sock=remote_sock)
 
     # Generalize TCP or Unix to a unit
-    local_unit = cfg_params['local_sock'] \
+    local_unit = cfg_params.local_sock \
                  if cfg_params.get('local_sock') \
-                 else f'{cfg_params["local_address"]}:{cfg_params["local_port"]}'
-    remote_unit = cfg_params['remote_sock'] \
+                 else f'{cfg_params.local_address}:{cfg_params.local_port}'
+    remote_unit = cfg_params.remote_sock \
                   if cfg_params.get('remote_sock') \
-                  else f'{cfg_params["remote_address"]}:{cfg_params["remote_port"]}'
+                  else f'{cfg_params.remote_address}:{cfg_params.remote_port}'
 
     cmd_args = CMD_TEMPLATE.format(verbose=verbose, local_unit=local_unit,
                                    remote_unit=remote_unit, ssh_host=ssh_host) \
@@ -226,13 +219,13 @@ def run(ssh_host: str = Argument(None, show_default=False, autocompletion=Autoco
                  _err_bufsize=1,
                  _in_bufsize=1,
                  _internal_bufsize=0
-    )
+                 )
 
     loop.run()
     try:
         cmd.terminate()
         cmd.wait()
-    except sh.SignalException_SIGTERM:
+    except (sh.SignalException_SIGTERM, ProcessLookupError):
         pass
 
 

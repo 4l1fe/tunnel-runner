@@ -1,6 +1,6 @@
 ## Description
 
-The smart tui for establishing an [ssh tunnel](https://www.ssh.com/academy/ssh/tunneling-example#what-is-ssh-port-forwarding,-aka-ssh-tunneling?).
+The smart TUI for establishing an [ssh tunnel](https://www.ssh.com/academy/ssh/tunneling-example#what-is-ssh-port-forwarding,-aka-ssh-tunneling?).
 
 Features:
 
@@ -14,30 +14,34 @@ Features:
 - [typer](https://github.com/tiangolo/typer)
 - [urwid](https://github.com/urwid/urwid)
 - [sh](https://github.com/amoffat/sh)
+- [dynaconf](https://github.com/dynaconf/dynaconf)
 
 ## Usage
 
-Create a config as described in the help text. Add as many sections `[[ssh_hosts]]`, `[[targets]]` as you need to autocomplete.
+Create a config as described in the help text. Add as many sections `[ssh_hosts]`, `[targets]` as you need to autocomplete.
 
 ```
 $ run_tunnel.py --help 
 
    Config options
-  --config        PATH  The `tunnel-runner.toml` config in the XDG_CONFIG_HOME or HOME/.config dir [default: /home/vol/.config/tunnel-runner.toml]
+  --config        PATH  The `tunnel-runner.toml` config in the `XDG_CONFIG_HOME` or `HOME/.config` dir
                         Config pattern of the TOML format:
-                        ```
-                        [[ssh_hosts]]
-                        name = "host.name"  # A valid ssh `HostName`
-                        description = "Helpful description to display in an autocompletion list."
-
-                        [[targets]]
-                        name = "service-name"  # An arbitrary name of valid TOML key
-                        local_address = "127.0.0.1"
-                        local_port = 8080
-                        remote_address = "127.0.0.1"
-                        remote_port = 8080
-                        description = "Helpful description to display in an autocompletion list."
+                    ```
+                    [ssh_hosts."host.name"]  # A valid ssh_config `Host` value prefixed with `ssh_hosts`
+                    description = "Helpful description to display in an autocompletion list."
+    
+                    [targets.service-name]  # An arbitrary name of valid TOML key prefixed with `targets`
+                    local_address = "127.0.0.1"
+                    local_port = 8080
+                    remote_address = "127.0.0.1"
+                    remote_port = 8080
+                    description = "Helpful description to display in an autocompletion list."
+                    
+                    
+                    [default: /home/user/.config/tunnel-runner.toml]
 ```
+
+
 Run using autocompletion `run_tunnel.py [TAB][TAB] [TAB][TAB]`
 
 `$ run_tunnel.py miniserver.local docker-sock`
@@ -51,7 +55,9 @@ Run using autocompletion `run_tunnel.py [TAB][TAB] [TAB][TAB]`
 
 - Autocompletion
 
-  ![](demo-autocompletion.png)
+  ![](autocomplete-host.gif)
+
+  ![](autocomplete-target.gif)
 
 - Resizing
 
